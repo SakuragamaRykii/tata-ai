@@ -1,16 +1,80 @@
-//use crate::math::*;
 
-use std::intrinsics::{powf64, sinf64};
+use crate::math::*;
 
-use nalgebra::DMatrix;
+use nalgebra::{DMatrix, coordinates::X, iter::MatrixIter};
 use rand::prelude::*;
 
 
 struct MHA{
-    Q : DMatrix<f64>,
-    K : DMatrix<f64>,
-    V : DMatrix<f64>,
-    output: DMatrix<f64>,
+    n_heads: usize,
+    d_k : usize,
+    hidden_size: usize,
+
+    w_q : DMatrix<f64>,
+    w_k : DMatrix<f64>,
+    w_v : DMatrix<f64>,
+    w_o : DMatrix<f64>,
+}
+
+impl MHA{
+    fn mha_forward(&self, X : DMatrix<f64>, max_seq_length: usize ) -> DMatrix<f64>{
+        let Q = X.clone() * &self.w_q;
+        let K = X.clone() * &self.w_k;
+        let V = X.clone() * &self.w_v;
+
+        let token_count = X.nrows();
+
+        let mut head_attentions = DMatrix::<f64>::zeros(token_count, self.hidden_size);
+
+        for head in 0..self.n_heads{
+            let col = head * self.d_k;
+
+            let Q_head = Q.view((0, col), (token_count, self.d_k)).into_owned();
+            let K_head= K.view((0, col), (token_count, self.d_k)).into_owned();
+            let V_head= V.view((0, col), (token_count, self.d_k)).into_owned();
+
+            let attention_head = self.evaluate_attention(Q_head, K_head, V_head, token_count, max_seq_length);
+
+            for i in 0..token_count{
+                for j in 0..self.d_k{
+                    head_attentions[(i, j + col)] = attention_head[(i, j)];
+
+                }
+            }
+
+
+        }
+        
+        let O = head_attentions * &self.w_o;
+        O
+
+    }
+
+    fn evaluate_attention(&self, Q : DMatrix<f64>, K : DMatrix<f64>, V : DMatrix<f64>,
+         token_count: usize, max_seq_length: usize) -> DMatrix<f64>{
+
+        let dk_sqrt = (self.d_k as f64).sqrt();
+        let num_sentences = token_count / max_seq_length;
+        let mut QK = (Q * K.transpose())/ dk_sqrt;
+
+        for sentence in 0..num_sentences{
+            // get sentence
+            let sentence_start = sentence * max_seq_length;
+            let mut sentence_block  = QK.view_mut((sentence_start, sentence_start),
+             (max_seq_length, max_seq_length));
+            softmax_inplace(sentence_block, max_seq_length);
+            // for row in 0..max_seq_length {
+            //     let current_row = sentence_block.row_mut(row);
+            //     softmax_row_inplace(current_row);
+            // }
+
+        }
+
+        QK * V
+    }
+
+
+
 }
 
 struct EmbedLayer{
@@ -115,6 +179,8 @@ impl Transformer{
 
 
 }
+
+
 
 // pub fn xavier_init(n_rows : usize, n_cols: usize)
 // -> DMatrix<f64>{
