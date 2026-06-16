@@ -1,7 +1,7 @@
 
 use crate::math::*;
 
-use nalgebra::{DMatrix, coordinates::X, iter::MatrixIter};
+use nalgebra::{DMatrix, DVector, coordinates::X, iter::MatrixIter};
 use rand::prelude::*;
 
 
@@ -104,12 +104,14 @@ impl EmbedLayer{
     }
 }
 
+
+
 pub struct Transformer{
     batch_size: usize,
     context_length : usize,
     hidden_size: usize,
     n_heads: usize,
-    d_k: usize,
+    d_k: usize, // hidden_size / n_heads
     num_classes: usize,
 
 }
