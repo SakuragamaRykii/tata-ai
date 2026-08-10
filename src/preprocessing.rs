@@ -76,10 +76,6 @@ pub fn tokenize_initial(mut input: String) -> Vec<Vec<String>>{
     
 }
 
-
-
-
-
 pub struct Tokenizer {
     pub vocabulary : HashMap<String, usize>,
     pub inverse_vocab : Vec<String>,
@@ -95,7 +91,7 @@ pub fn append_token(vocab : &mut HashMap<String, usize>, inverse : &mut Vec<Stri
 
 impl Tokenizer{
 
-    pub fn new(&self, input : String) -> Tokenizer{
+    pub fn new(input : String) -> Tokenizer{
         let mut vocabulary = HashMap::<String, usize>::new();
         let mut inverse_vocab = Vec::<String>::new();
 
@@ -104,7 +100,8 @@ impl Tokenizer{
         
         append_token(&mut vocabulary, &mut inverse_vocab, pad_sequence_token);
         append_token(&mut vocabulary, &mut inverse_vocab, fallback_token);
-        
+        append_token(&mut vocabulary, &mut inverse_vocab, 'Ġ'.to_string());
+
         for c in input.chars(){
             let token_str = c.to_string();
             
@@ -112,14 +109,12 @@ impl Tokenizer{
                 append_token(&mut vocabulary, &mut inverse_vocab, token_str);
             }
         }
-        append_token(&mut vocabulary, &mut inverse_vocab, 'Ġ'.to_string());
 
-       // self.tokenize_initial(input);
 
         let merge_history: Vec<(String, String)> = Vec::<(String, String)>::new();
+        
         Tokenizer{vocabulary, inverse_vocab, merge_history}
     }
-
 
 
     pub fn bpe(&mut self, mut corpus: Vec<Vec<String>>, target_vocab_size : usize){

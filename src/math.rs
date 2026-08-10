@@ -21,7 +21,8 @@ pub fn softmax(d: DMatrix<f64>) -> DMatrix<f64> {
 
 
 pub fn softmax_row_inplace(
-    mut row: Matrix<f64, Const<1>, Dyn, ViewStorageMut<'_, f64, Const<1>, Dyn, Const<1>, Dyn>>) {
+    mut row: Matrix<f64, Const<1>, Dyn, ViewStorageMut<'_, f64, Const<1>, Dyn, Const<1>, Dyn>>
+) {
     // 1. For numerical stability, find the max value in the row
     let max_val = row.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
     
@@ -32,7 +33,9 @@ pub fn softmax_row_inplace(
     row.apply(|x| *x = (*x - max_val).exp() / exp_sum);
 }
 
-pub fn softmax_inplace(mut d: Matrix<f64, Dyn, Dyn, ViewStorageMut<'_, f64, Dyn, Dyn, Const<1>, Dyn>>, n_rows: usize){
+//mut d: Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>>
+
+pub fn softmax_inplace(d: &mut DMatrix<f64>, n_rows: usize){
     for row in 0..n_rows {
         let current_row = d.row_mut(row);
         softmax_row_inplace(current_row);
@@ -50,7 +53,7 @@ pub struct Normalizer{
 
 impl Normalizer{
 
-    pub fn new(&mut self, hidden_size : usize) -> Normalizer{
+    pub fn new(hidden_size : usize) -> Normalizer{
         Normalizer{
             hidden_size,
             gamma: DVector::<f64>::repeat(hidden_size, 1.0),
@@ -73,7 +76,10 @@ impl Normalizer{
             let x = X.row(i);
             let x_hat = self.x_hat(x);
 
-            let y = self.gamma.clone() * x_hat + self.beta.clone();
+            let y = x_hat.component_mul(&self.gamma.transpose()) + self.beta.transpose();
+            // We use component_mul with x_hat and gamma because we want to keep y as a 1 * N column vector
+            // cuz if just multiply x_hat with gamma normally it becomes an N * N matrix which gets applied to 
+            // each row of output (line below me) and that makes no sense
             output.row_mut(i).copy_from(&y);
         }
         output

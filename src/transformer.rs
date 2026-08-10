@@ -5,7 +5,7 @@ use nalgebra::{DMatrix, DVector, coordinates::X, iter::MatrixIter};
 use rand::prelude::*;
 
 
-struct MHA{
+pub struct MHA{
     n_heads: usize,
     d_k : usize,
     hidden_size: usize,
@@ -17,7 +17,29 @@ struct MHA{
 }
 
 impl MHA{
-    fn mha_forward(&self, X : DMatrix<f64>, max_seq_length: usize ) -> DMatrix<f64>{
+    pub fn new(
+        n_heads: usize,
+        d_k : usize,
+        hidden_size: usize,
+
+        w_q : DMatrix<f64>,
+        w_k : DMatrix<f64>,
+        w_v : DMatrix<f64>,
+        w_o : DMatrix<f64>,
+    ) -> MHA {
+        MHA{
+            n_heads,
+            d_k,
+            hidden_size,
+            w_q,
+            w_k,
+            w_v,
+            w_o,
+        }
+
+    }
+
+    pub fn mha_forward(&self, X : DMatrix<f64>, max_seq_length: usize ) -> DMatrix<f64>{
         let Q = X.clone() * &self.w_q;
         let K = X.clone() * &self.w_k;
         let V = X.clone() * &self.w_v;
@@ -50,34 +72,47 @@ impl MHA{
 
     }
 
-    fn evaluate_attention(&self, Q : DMatrix<f64>, K : DMatrix<f64>, V : DMatrix<f64>,
+    pub fn evaluate_attention(&self, Q : DMatrix<f64>, K : DMatrix<f64>, V : DMatrix<f64>,
          token_count: usize, max_seq_length: usize) -> DMatrix<f64>{
 
         let dk_sqrt = (self.d_k as f64).sqrt();
         let num_sentences = token_count / max_seq_length;
-        let mut QK = (Q * K.transpose())/ dk_sqrt;
+        
+        let mut result = DMatrix::<f64>::zeros(token_count, self.d_k );
 
         for sentence in 0..num_sentences{
             // get sentence
             let sentence_start = sentence * max_seq_length;
-            let mut sentence_block  = QK.view_mut((sentence_start, sentence_start),
-             (max_seq_length, max_seq_length));
-            softmax_inplace(sentence_block, max_seq_length);
-            // for row in 0..max_seq_length {
-            //     let current_row = sentence_block.row_mut(row);
-            //     softmax_row_inplace(current_row);
-            // }
+
+             let q_block = Q.view((sentence_start, sentence_start),
+                                                                        (max_seq_length, self.d_k)).into_owned();
+             let k_block = K.view((sentence_start, sentence_start),
+                                                                        (max_seq_length, self.d_k)).into_owned();
+             let v_block = K.view((sentence_start, sentence_start),
+                                                                        (max_seq_length, self.d_k)).into_owned();
+            
+            
+             let mut qk_block = (q_block * k_block.transpose()) / dk_sqrt;
+             // works by rows of words where each word is a bunch of numerical tokens
+            // and these are blocked via view_mut
+
+            softmax_inplace(&mut qk_block, max_seq_length);
+            // softmaxxing the entire block so the entire sentence
+
+
+            result.view_mut((sentence_start, 0), (max_seq_length, self.d_k))
+            .copy_from(&(qk_block*v_block));
 
         }
 
-        QK * V
+        result
     }
 
 
 
 }
 
-struct EmbedLayer{
+pub struct EmbedLayer{
     table: DMatrix<f64>,
     hidden_size: usize,
     vocab_size: usize,
@@ -86,7 +121,7 @@ struct EmbedLayer{
 
 impl EmbedLayer{
 
-    fn new(&mut self, hidden_size:usize, vocab_size :usize ) -> EmbedLayer{
+    pub fn new(hidden_size:usize, vocab_size :usize ) -> EmbedLayer{
 
         let mut token_embedding_table: DMatrix<f64>
             = DMatrix::zeros(vocab_size, hidden_size);
@@ -113,14 +148,18 @@ pub struct Transformer{
     n_heads: usize,
     d_k: usize, // hidden_size / n_heads
     num_classes: usize,
+    embed_layer : EmbedLayer,
 
 }
 
 impl Transformer{
-    pub fn new(&mut self, 
+    pub fn new(
         batch_size: usize, context_length: usize,
         hidden_size: usize, n_heads: usize, 
-        num_classes: usize)
+        num_classes: usize,
+        embed_layer : EmbedLayer,
+
+    )
     -> Transformer
     {
 
@@ -130,11 +169,12 @@ impl Transformer{
             n_heads,
             d_k: hidden_size/n_heads, 
             num_classes,
+            embed_layer,
         }
         
     }
 
-    pub fn embed_forward(&self, input_ids : &DMatrix<usize>, embed_table: DMatrix<f64>) -> DMatrix<f64>{
+    pub fn embed_forward(&self, input_ids : &DMatrix<usize>) -> DMatrix<f64> { //, embed_table: DMatrix<f64>) -> DMatrix<f64>{
         //input_ids : batch_size * sentence_length matrix
         let batch_size = input_ids.nrows();
         let max_seq_length : usize = input_ids.ncols();
@@ -145,35 +185,41 @@ impl Transformer{
         for row in 0..batch_size{
             for col in 0..max_seq_length{
                 let id = input_ids[(row, col)];
-                let sequence = embed_table.row(id);
+                let sequence = self.embed_layer.table.row(id);
 
                 let assign_index = (max_seq_length * row) + col;
                 output.set_row(assign_index, &sequence);
             }
         }
 
-        output
+        self.add_positional_encodings(&mut output, max_seq_length);
 
+        output
+        
     }
 
-    pub fn add_positional_encodings(&mut self, embed_table: &mut DMatrix<f64>){
-        let nrows = embed_table.nrows();  
-        let ncols = embed_table.ncols();
+    pub fn add_positional_encodings(&self, embeddings: &mut DMatrix<f64>, max_seq_length: usize){//, embed_table: &mut DMatrix<f64>){
+        // WE USING THIS FUNCTION SO THAT 
+        // WE DIRECTLY ADD ENCODINGS INTO THE OUTPUT OF embed_forward()
+        // SO THAT IT RETURNS THE ENCODED OUTPUT
+        // SINCE INPUT EMBEDDING AND POSITIONAL ENCODING HAPPEN BACK TO BACK ALWAYS
+        let nrows = embeddings.nrows();  
+        let ncols = embeddings.ncols();
         let denom_base : f64 = 10000.0;
 
         for row in 0..nrows{
             for col in 0..ncols{
-                let pos = (row % ncols) as f64;
+                let pos = (row % max_seq_length) as f64;
                 let exp = col as f64 /self.hidden_size as f64;
                 if(col % 2 == 0){
                     // sin thing
                     let encoding = f64::sin(pos/ denom_base.powf(exp));
-                    embed_table[(row, col)] += encoding;
+                    embeddings[(row, col)] += encoding;
                 }
                 else{
                     //cos thing
                     let encoding = f64::cos(pos/ denom_base.powf(exp));
-                    embed_table[(row, col)] += encoding;
+                    embeddings[(row, col)] += encoding;
                 }
             }
         }
