@@ -9,6 +9,12 @@ pub fn relu(d : DMatrix<f64>) -> DMatrix<f64> {
 
 }
 
+pub fn relu_row(d : RowDVector<f64>) -> RowDVector<f64> {
+    d.map(|x| x.max(0.0))
+
+}
+
+
 pub fn lrelu(d : DMatrix<f64>, alpha: f64) -> DMatrix<f64> {
     d.map(|x| x.max(x * alpha))
 
@@ -45,19 +51,20 @@ pub fn softmax_inplace(d: &mut DMatrix<f64>, n_rows: usize){
 
 
 pub struct Normalizer{
-    hidden_size : usize,
-    gamma : DVector<f64>,
-    beta : DVector<f64>,
+    d_model : usize,
+    gamma : DVector<f64>, // rescale (can be learned via backwards)
+    beta : DVector<f64>, // shift (can be learned via backwards)
+
     
 }
 
 impl Normalizer{
 
-    pub fn new(hidden_size : usize) -> Normalizer{
+    pub fn new(d_model : usize) -> Normalizer{
         Normalizer{
-            hidden_size,
-            gamma: DVector::<f64>::repeat(hidden_size, 1.0),
-            beta : DVector::<f64>::zeros(hidden_size)
+            d_model,
+            gamma: DVector::<f64>::repeat(d_model, 1.0),
+            beta : DVector::<f64>::zeros(d_model)
         }
     }
 
@@ -70,6 +77,7 @@ impl Normalizer{
     }
 
     pub fn normalize_forward(&self, X : DMatrix<f64>) -> DMatrix<f64>{
+        // Input X is always gonna be the output of a sublayer added with their own input
         let mut output = DMatrix::<f64>::zeros(X.nrows(), X.ncols());
 
         for i in 0..X.nrows(){
@@ -89,14 +97,14 @@ impl Normalizer{
     pub fn backward_norm(&self, X : DMatrix<f64>, dldy : DMatrix<f64>) 
     -> (DMatrix<f64>, DVector<f64>, DVector<f64>) // for updating X, gamma and beta
     {
-        let mut dldgamma = DVector::<f64>::zeros(self.hidden_size);
-        let mut dldbeta = DVector::<f64>::zeros(self.hidden_size);
+        let mut dldgamma = DVector::<f64>::zeros(self.d_model);
+        let mut dldbeta = DVector::<f64>::zeros(self.d_model);
 
         let num_tokens = X.nrows();
         let token_size = X.ncols();
         let mut dldx = DMatrix::<f64>::zeros(num_tokens, token_size);
 
-        let hidden_size_float = self.hidden_size as f64;
+        let d_model_float = self.d_model as f64;
 
         for i in 0..num_tokens{
             let dldy_row = dldy.row(i);
@@ -104,25 +112,25 @@ impl Normalizer{
             let x_hat = self.x_hat(x);
 
             // for dldx
-            let denominator = 1. / ( hidden_size_float * (x.variance() + 1e-3).sqrt());
+            let denominator = 1. / ( d_model_float * (x.variance() + 1e-3).sqrt());
 
-            let mut a = vec![0.0; self.hidden_size]; // actually more efficient than initializing DVector Zeros
+            let mut a = vec![0.0; self.d_model]; // actually more efficient than initializing DVector Zeros
             let mut b = 0.0;
             let mut c_sum = 0.0;
 
-            for j in 0..self.hidden_size{
+            for j in 0..self.d_model{
                 dldgamma[j] += dldy[(i, j)] * x_hat[j];
                 dldbeta[j] += dldy[(i, j)] ;
 
                 let dldx_hat_j = dldy_row[j] * self.gamma[j];
 
-                a[j] = dldx_hat_j * hidden_size_float;
+                a[j] = dldx_hat_j * d_model_float;
                 b += dldx_hat_j;
                 c_sum += dldx_hat_j * x_hat[j];
 
             }       
 
-            for j in 0..self.hidden_size{
+            for j in 0..self.d_model{
                 let c = c_sum * x_hat[j];
                 dldx[(i, j)] = (a[j] - b - c) * denominator;
             }
