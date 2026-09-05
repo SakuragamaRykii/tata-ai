@@ -3,15 +3,20 @@ use std::num::FpCategory::Normal;
 
 use crate::math::*;
 
-use nalgebra::{DMatrix, DVector, RowDVector,  coordinates::X, iter::MatrixIter};
+use nalgebra::*;
 use rand::prelude::*;
 
 
-pub struct MHA{
-    n_heads: usize,
-    d_k : usize,
-    d_model: usize,
+pub const D_MODEL: usize = 64; // 512 for bigger tests
+// dimentionality of a token
 
+pub const N_HEADS: usize = 8;
+//number of perspectives the models gonna have on
+
+pub const D_K : usize = D_MODEL / N_HEADS;
+
+
+pub struct MHA{
     w_q : DMatrix<f64>,
     w_k : DMatrix<f64>,
     w_v : DMatrix<f64>,
@@ -20,19 +25,12 @@ pub struct MHA{
 
 impl MHA{
     pub fn new(
-        n_heads: usize,
-        d_k : usize,
-        d_model: usize,
-
         w_q : DMatrix<f64>,
         w_k : DMatrix<f64>,
         w_v : DMatrix<f64>,
         w_o : DMatrix<f64>,
     ) -> MHA {
         MHA{
-            n_heads,
-            d_k,
-            d_model,
             w_q,
             w_k,
             w_v,
@@ -49,19 +47,19 @@ impl MHA{
 
         let token_count = X.nrows();
 
-        let mut head_attentions = DMatrix::<f64>::zeros(token_count, self.d_model);
+        let mut head_attentions = DMatrix::<f64>::zeros(token_count, D_MODEL);
 
-        for head in 0..self.n_heads{
-            let col = head * self.d_k;
+        for head in 0..N_HEADS{
+            let col = head * D_K;
 
-            let Q_head = Q.view((0, col), (token_count, self.d_k)).into_owned();
-            let K_head= K.view((0, col), (token_count, self.d_k)).into_owned();
-            let V_head= V.view((0, col), (token_count, self.d_k)).into_owned();
+            let Q_head = Q.view((0, col), (token_count, D_K)).into_owned();
+            let K_head= K.view((0, col), (token_count, D_K)).into_owned();
+            let V_head= V.view((0, col), (token_count, D_K)).into_owned();
 
             let attention_head = self.evaluate_attention(Q_head, K_head, V_head, token_count, max_seq_length);
 
             for i in 0..token_count{
-                for j in 0..self.d_k{
+                for j in 0..D_K{
                     head_attentions[(i, j + col)] = attention_head[(i, j)];
 
                 }
@@ -87,19 +85,19 @@ impl MHA{
 
         let token_count = Q.nrows();
 
-        let mut head_attentions = DMatrix::<f64>::zeros(token_count, self.d_model);
+        let mut head_attentions = DMatrix::<f64>::zeros(token_count, D_MODEL);
 
-        for head in 0..self.n_heads{
-            let col = head * self.d_k;
+        for head in 0..N_HEADS{
+            let col = head * D_K;
 
-            let Q_head = Q.view((0, col), (token_count, self.d_k)).into_owned();
-            let K_head= K.view((0, col), (token_count, self.d_k)).into_owned();
-            let V_head= V.view((0, col), (token_count, self.d_k)).into_owned();
+            let Q_head = Q.view((0, col), (token_count, D_K)).into_owned();
+            let K_head= K.view((0, col), (token_count, D_K)).into_owned();
+            let V_head= V.view((0, col), (token_count, D_K)).into_owned();
 
             let attention_head = self.evaluate_attention(Q_head, K_head, V_head, token_count, max_seq_length);
 
             for i in 0..token_count{
-                for j in 0..self.d_k{
+                for j in 0..D_K{
                     head_attentions[(i, j + col)] = attention_head[(i, j)];
 
                 }
@@ -115,21 +113,21 @@ impl MHA{
     pub fn evaluate_attention(&self, Q : DMatrix<f64>, K : DMatrix<f64>, V : DMatrix<f64>,
          token_count: usize, max_seq_length: usize) -> DMatrix<f64>{
 
-        let dk_sqrt = (self.d_k as f64).sqrt();
+        let dk_sqrt = (D_K as f64).sqrt();
         let num_sentences = token_count / max_seq_length;
         
-        let mut result = DMatrix::<f64>::zeros(token_count, self.d_k );
+        let mut result = DMatrix::<f64>::zeros(token_count, D_K );
 
         for sentence in 0..num_sentences{
             // get sentence
             let sentence_start = sentence * max_seq_length;
 
              let q_block = Q.view((sentence_start, 0),
-                                                                        (max_seq_length, self.d_k)).into_owned();
+                                                                        (max_seq_length, D_K)).into_owned();
              let k_block = K.view((sentence_start, 0),
-                                                                        (max_seq_length, self.d_k)).into_owned();
+                                                                        (max_seq_length, D_K)).into_owned();
              let v_block = V.view((sentence_start, 0),
-                                                                        (max_seq_length, self.d_k)).into_owned();
+                                                                        (max_seq_length, D_K)).into_owned();
             
             
              let mut qk_block = (q_block * k_block.transpose()) / dk_sqrt;
@@ -140,7 +138,7 @@ impl MHA{
             // softmaxxing the entire block so the entire sentence
 
 
-            result.view_mut((sentence_start, 0), (max_seq_length, self.d_k))
+            result.view_mut((sentence_start, 0), (max_seq_length, D_K))
             .copy_from(&(qk_block*v_block));
 
         }
@@ -159,25 +157,23 @@ pub struct FeedForward{
     b1 : RowDVector<f64>,
     b2 : RowDVector<f64>,
     d_ff : usize,
-    d_model : usize,
 }
 
 impl FeedForward{
     pub fn new(
-        w1: DMatrix<f64>, // d_model x d_ff
-        w2: DMatrix<f64>, // d_ff x d_model
+        w1: DMatrix<f64>, // D_MODEL x d_ff
+        w2: DMatrix<f64>, // d_ff x D_MODEL
         b1 : RowDVector<f64>, // 1 x d_ff
-        b2 : RowDVector<f64>, // 1 x d_model
+        b2 : RowDVector<f64>, // 1 x D_MODEL
         d_ff : usize,
-        d_model : usize,
     ) -> FeedForward{
-        FeedForward { w1, w2, b1, b2, d_ff, d_model }
+        FeedForward { w1, w2, b1, b2, d_ff, }
     }
 
 
     pub fn ffn(&self, X : DMatrix<f64>) -> DMatrix<f64>{
          //FFN(x) = max(0, xW1 + b1)W2 + b2
-        // X is of dimension k x d_model and is the output of a MHA evaluation followed by add and norm
+        // X is of dimension k x D_MODEL and is the output of a MHA evaluation followed by add and norm
 
         // X*W1 + b1
         let mut ffn_a = X * &self.w1;
@@ -187,7 +183,7 @@ impl FeedForward{
         // relu on above
         let ffn_relu = relu(ffn_a);
 
-        // ffn_relu * W2  IS              k x d_model
+        // ffn_relu * W2  IS              k x D_MODEL
         let mut ffn_return = ffn_relu * &self.w2;
 
         // WE NEED TO ADD b2 ON EACH ROW
@@ -203,18 +199,17 @@ impl FeedForward{
 }
 
 pub struct EmbedLayer{
-    table: DMatrix<f64>,
-    d_model: usize,
+    table: DMatrix<f64>, //also the weight W for Linear Output Projector. vocab_size * D_MODEL
     vocab_size: usize,
 
 }
 
 impl EmbedLayer{
 
-    pub fn new(d_model:usize, vocab_size :usize ) -> EmbedLayer{
+    pub fn new(vocab_size :usize ) -> EmbedLayer{
 
         let mut token_embedding_table: DMatrix<f64>
-            = DMatrix::zeros(vocab_size, d_model);
+            = DMatrix::zeros(vocab_size, D_MODEL);
         let mut rng = rand::rng();
         token_embedding_table = 
             token_embedding_table.map(|_| 
@@ -223,7 +218,6 @@ impl EmbedLayer{
 
         EmbedLayer{
             table: token_embedding_table,
-            d_model,
             vocab_size,
         }
     }
@@ -234,9 +228,6 @@ impl EmbedLayer{
 pub struct Embedder{
     batch_size: usize,
     context_length : usize,
-    d_model: usize,
-    n_heads: usize,
-    d_k: usize, // d_model / n_heads
     num_classes: usize,
     embed_layer : EmbedLayer,
 
@@ -245,7 +236,6 @@ pub struct Embedder{
 impl Embedder{
     pub fn new(
         batch_size: usize, context_length: usize,
-        d_model: usize, n_heads: usize, 
         num_classes: usize,
         embed_layer : EmbedLayer,
 
@@ -255,9 +245,6 @@ impl Embedder{
 
         Embedder { batch_size,
             context_length,
-            d_model, 
-            n_heads,
-            d_k: d_model/n_heads, 
             num_classes,
             embed_layer,
         }
@@ -270,7 +257,7 @@ impl Embedder{
         let max_seq_length : usize = input_ids.ncols();
 
         let mut output 
-        = DMatrix::<f64>::zeros(batch_size*max_seq_length, self.d_model);
+        = DMatrix::<f64>::zeros(batch_size*max_seq_length, D_MODEL);
 
         for row in 0..batch_size{
             for col in 0..max_seq_length{
@@ -300,7 +287,7 @@ impl Embedder{
         for row in 0..nrows{
             for col in 0..ncols{
                 let pos = (row % max_seq_length) as f64;
-                let exp = col as f64 /self.d_model as f64;
+                let exp = col as f64 /D_MODEL as f64;
                 if(col % 2 == 0){
                     // sin thing
                     let encoding = f64::sin(pos/ denom_base.powf(exp));
@@ -315,9 +302,104 @@ impl Embedder{
         }
     }
 
+    pub fn project_decoder_out(&self, decoder_output: DMatrix<f64>) -> DMatrix<f64>{
+        decoder_output * self.embed_layer.table.transpose()
+    }
 
 }
 
+
+pub struct Normalizer{
+    gamma : DVector<f64>, // rescale (can be learned via backwards)
+    beta : DVector<f64>, // shift (can be learned via backwards)
+
+    
+}
+
+impl Normalizer{
+
+    pub fn new() -> Normalizer{
+        Normalizer{
+            gamma: DVector::<f64>::repeat(D_MODEL, 1.0),
+            beta : DVector::<f64>::zeros(D_MODEL)
+        }
+    }
+
+
+    pub fn x_hat(&self, x : Matrix<f64, Const<1>, Dyn, ViewStorage<'_, f64, Const<1>, Dyn, Const<1>, Dyn>>) 
+    -> Matrix<f64, Const<1>, Dyn, VecStorage<f64, Const<1>, Dyn>>{
+        let mu = x.mean();
+        let variance = x.variance() + 1e-3;
+        x.map(|k| (k - mu) / variance.sqrt())
+    }
+
+    pub fn normalize_forward(&self, X : DMatrix<f64>) -> DMatrix<f64>{
+        // Input X is always gonna be the output of a sublayer added with their own input
+        let mut output = DMatrix::<f64>::zeros(X.nrows(), X.ncols());
+
+        for i in 0..X.nrows(){
+            let x = X.row(i);
+            let x_hat = self.x_hat(x);
+
+            let y = x_hat.component_mul(&self.gamma.transpose()) + self.beta.transpose();
+            // We use component_mul with x_hat and gamma because we want to keep y as a 1 * N column vector
+            // cuz if just multiply x_hat with gamma normally it becomes an N * N matrix which gets applied to 
+            // each row of output (line below me) and that makes no sense
+            output.row_mut(i).copy_from(&y);
+        }
+        output
+    }
+
+
+    pub fn backward_norm(&self, X : DMatrix<f64>, dldy : DMatrix<f64>) 
+    -> (DMatrix<f64>, DVector<f64>, DVector<f64>) // for updating X, gamma and beta
+    {
+        let mut dldgamma = DVector::<f64>::zeros(D_MODEL);
+        let mut dldbeta = DVector::<f64>::zeros(D_MODEL);
+
+        let num_tokens = X.nrows();
+        let token_size = X.ncols();
+        let mut dldx = DMatrix::<f64>::zeros(num_tokens, token_size);
+
+        let D_MODEL_float = D_MODEL as f64;
+
+        for i in 0..num_tokens{
+            let dldy_row = dldy.row(i);
+            let x = X.row(i);
+            let x_hat = self.x_hat(x);
+
+            // for dldx
+            let denominator = 1. / ( D_MODEL_float * (x.variance() + 1e-3).sqrt());
+
+            let mut a = vec![0.0; D_MODEL]; // actually more efficient than initializing DVector Zeros
+            let mut b = 0.0;
+            let mut c_sum = 0.0;
+
+            for j in 0..D_MODEL{
+                dldgamma[j] += dldy[(i, j)] * x_hat[j];
+                dldbeta[j] += dldy[(i, j)] ;
+
+                let dldx_hat_j = dldy_row[j] * self.gamma[j];
+
+                a[j] = dldx_hat_j * D_MODEL_float;
+                b += dldx_hat_j;
+                c_sum += dldx_hat_j * x_hat[j];
+
+            }       
+
+            for j in 0..D_MODEL{
+                let c = c_sum * x_hat[j];
+                dldx[(i, j)] = (a[j] - b - c) * denominator;
+            }
+
+        }
+
+        (dldx, dldgamma, dldbeta)
+
+    }
+
+
+}
 
 pub struct EncoderLayer{
     mha : MHA,
@@ -383,10 +465,6 @@ impl Encoder{
 }
 
 
-    // w_q : DMatrix<f64>,
-    // w_k : DMatrix<f64>,
-    // w_v : DMatrix<f64>,
-    // w_o : DMatrix<f64>,
 pub struct DecoderLayer{
     masked_mha: MHA,
     norm1: Normalizer,
@@ -409,6 +487,8 @@ impl DecoderLayer{
     ) -> DecoderLayer{
         DecoderLayer { masked_mha, norm1, encoder_mha, norm2, ffn, norm3 }
     }
+
+
 
 
     pub fn forward(&self, X : DMatrix<f64>, encoder_out : DMatrix<f64>,max_seq_length: usize) -> DMatrix<f64>{
@@ -449,6 +529,7 @@ impl Decoder{
         Decoder { layers, output_emedder, encoder_out }
     }
 
+
     pub fn forward(&self, X : DMatrix<usize>, max_seq_length: usize) -> DMatrix<f64>{
         let embed_x = self.output_emedder.embed_forward(&X);
 
@@ -456,23 +537,51 @@ impl Decoder{
         for layer in self.layers.iter(){
             layer_output = layer.forward(layer_output, self.encoder_out.clone(), max_seq_length);
         }
-        layer_output
         // THIS IS NOT THE END OF THIS 
         // NEXT SESH:
         // make the linear block which is the output projection
         // which basically uses layer_output to get actual token predictions
         // Once we get this we can softmax it to get the probabilies and then
         // THAT becomes the output of this function
+        softmax(self.output_emedder.project_decoder_out(layer_output))
     }
+
 
 }
 
 
-// pub fn xavier_init(n_rows : usize, n_cols: usize)
-// -> DMatrix<f64>{
-//     let mut rng = rand::rng();
+pub struct Transformer{
+    encoder: Encoder,
+    decoder: Decoder,
 
-//     let limit = ()
+}
+
+impl Transformer{
+    pub fn new(n : usize, encoder_empty: Encoder, decoder_empty : Decoder){
+
+        
+
+        for i in 0..n{
+
+        }
+
+// FOR ENCODER
+// mha : MHA,
+// norm_mha : Normalizer,
+// ffn : FeedForward,
+// norm_ffn : Normalizer,
+
+// FOR DECODER
+//    masked_mha: MHA,
+//     norm1: Normalizer,
+//     encoder_mha: MHA,
+//     norm2: Normalizer,
+//     ffn: FeedForward,
+//     norm3: Normalizer,
 
 
-// }
+// INITIALIZE THE ABOVE N TIMES
+
+    }
+
+}

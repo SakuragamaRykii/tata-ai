@@ -1,6 +1,7 @@
 mod transformer;
 mod math;
 mod preprocessing;
+mod classifier;
 
 use preprocessing::tokenize_initial;
 

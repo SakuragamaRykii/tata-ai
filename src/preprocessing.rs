@@ -97,9 +97,11 @@ impl Tokenizer{
 
         let pad_sequence_token = "<PAD>".to_string();
         let fallback_token = "<UNK>".to_string();
+        let cls_token = "<CLS>".to_string();
         
         append_token(&mut vocabulary, &mut inverse_vocab, pad_sequence_token);
         append_token(&mut vocabulary, &mut inverse_vocab, fallback_token);
+        append_token(&mut vocabulary, &mut inverse_vocab, cls_token);
         append_token(&mut vocabulary, &mut inverse_vocab, 'Ġ'.to_string());
 
         for c in input.chars(){
