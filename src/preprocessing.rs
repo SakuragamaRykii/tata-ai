@@ -182,7 +182,7 @@ impl Tokenizer{
 
     pub fn encode(&self, mut input: String) -> Vec<usize>{
         let mut input_tokenized = tokenize_initial(input);
-
+        input_tokenized.insert(0, vec!["<CLS>".to_string()]);
         for (a, b) in &self.merge_history{
             for word in input_tokenized.iter_mut(){
                 let mut token_merged = Vec::<String>::new();

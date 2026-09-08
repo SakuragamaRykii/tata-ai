@@ -3,7 +3,7 @@
 use nalgebra::{DMatrix, RowDVector};
 use rand::{RngExt, rng};
 
-use crate::{classifier, math::softmax_inplace, transformer::*};
+use crate::{classifier, math::{softmax, softmax_inplace}, transformer::*};
 
     // mha : MHA,
     // norm_mha : Normalizer,
@@ -75,7 +75,7 @@ impl Classifier{
         Classifier{num_classes, n, w, b, encoder}
     }
 
-    pub fn forward(&self, inputs: DMatrix<usize>){
+    pub fn forward(&self, inputs: DMatrix<usize>) -> DMatrix<f64>{
         // inputs should be preprocessed input sentences
         // max seq length to be predetermined?
         let batch_size = inputs.nrows();
@@ -84,6 +84,20 @@ impl Classifier{
         let encode = self.encoder.forward(inputs, max_seq_length);
         //outputs (batch_size*max_seq_length) x D_MODEL
         //so we gonna crunch this to a bunch of num_classes x D_MODEL
+        let mut cls_accum = DMatrix::<f64>::zeros(batch_size, D_MODEL);
+
+        for i in 0..batch_size{
+            let idx = i * max_seq_length;
+            let cls = encode.row(idx);
+            //
+            cls_accum.set_row(i, &cls);
+        }
+
+        let mut cls_applied = cls_accum * &self.w;
+        for mut row in cls_applied.row_iter_mut(){row += &self.b;}
+
+        softmax_inplace(&mut cls_applied, batch_size);
+        cls_applied
 
     }
     
