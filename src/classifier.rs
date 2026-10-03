@@ -1,5 +1,8 @@
 
 
+
+use std::print;
+
 use nalgebra::{DMatrix, RowDVector};
 use rand::{RngExt, rng};
 
@@ -20,6 +23,8 @@ pub struct Classifier{
     w: DMatrix<f64>, // D_MODEL x num_classes, for crunching encoder output into class
     b: RowDVector<f64>, // 1 x num_classes. 
     encoder: Encoder,
+    c_cache : DMatrix<f64>,
+    output_cache : DMatrix<f64>,
 }
 
 impl Classifier{
@@ -71,11 +76,12 @@ impl Classifier{
         let embedder = Embedder::new(batch_size, context_length, num_classes, embed_layer);
 
         let encoder = Encoder::new(embedder, encoder_layers);
-
-        Classifier{num_classes, n, w, b, encoder}
+        let output_cache = DMatrix::<f64>::zeros(3, 1)
+;
+        Classifier{num_classes, n, w, b, encoder, output_cache, c_cache : DMatrix::<f64>::zeros(1, 1),}
     }
 
-    pub fn forward(&self, inputs: DMatrix<usize>) -> DMatrix<f64>{
+    pub fn forward(&mut self, inputs: DMatrix<usize>) -> DMatrix<f64>{
         // inputs should be preprocessed input sentences
         // max seq length to be predetermined?
         let batch_size = inputs.nrows();
@@ -92,15 +98,45 @@ impl Classifier{
             //
             cls_accum.set_row(i, &cls);
         }
-
+        self.c_cache = cls_accum.clone();
         let mut cls_applied = cls_accum * &self.w;
         for mut row in cls_applied.row_iter_mut(){row += &self.b;}
 
         softmax_inplace(&mut cls_applied, batch_size);
+        self.output_cache = cls_applied.clone();
         cls_applied
 
+        //[0.5, 0.2, 0.3] actual idx = 2 L =  - log( 0.3)
+
     }
-    
+
+
+    pub fn backwards(&mut self, actual_class: usize, lr: f64){
+        let loss =  -&self.output_cache[actual_class].log10();
+        println!("Loss = {}", loss);
+        // dl / dw_q, w_k, w_v, w_o, w1, w1, b1, b2, w, b
+        // per layer
+        let mut dldz = self.output_cache.clone();
+        //z = cw + b    in other words cls applied
+        // dzdw = c
+        // dldw = c_trans * dldz
+        // dldb = dldz
+        // dldc = dldz * w_trans
+        let dldw = self.c_cache.transpose() * dldz.clone();
+        let dldb = dldz.clone();
+        let dldc = dldz * self.w.transpose();
+
+        self.w -= lr * dldw;
+        self.b -= lr * dldb; 
+
+        let mut dldo = DMatrix::<f64>::zeros(
+            self.c_cache.nrows(),
+            self.c_cache.ncols()
+        );
+        dldo.row_mut(0).copy_from(&dldc.row(0));
+        self.encoder.backwards(dldo, lr);
+    }
+
 
 
 }
