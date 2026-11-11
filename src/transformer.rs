@@ -1,4 +1,3 @@
-
 use std::num::FpCategory::Normal;
 
 use crate::math::*;
@@ -27,7 +26,7 @@ pub struct MHA{
     k_cache: DMatrix<f64>,
     v_cache: DMatrix<f64>,
     heads_cache: DMatrix<f64>,
-    attention_cache: DMatrix<f64>,
+    attention_cache: Vec<DMatrix<f64>>, // one (token_count x max_seq_length) matrix per head
 }
 
 impl MHA{
@@ -47,16 +46,16 @@ impl MHA{
             k_cache: DMatrix::zeros(1, 1),
             v_cache: DMatrix::zeros(1, 1),
             heads_cache : DMatrix::zeros(1, 1),
-            attention_cache : DMatrix::zeros(1, 1)
+            attention_cache : Vec::new()
         }
 
     }
 
-    pub fn mha_forward(&mut self, X : DMatrix<f64>, max_seq_length: usize ) -> DMatrix<f64>{
+    pub fn mha_forward(&mut self, X : &DMatrix<f64>, max_seq_length: usize ) -> DMatrix<f64>{
         // this func does the MHA sublayer block for any given X
-        let Q = X.clone() * &self.w_q;
-        let K = X.clone() * &self.w_k;
-        let V = X.clone() * &self.w_v;
+        let Q = X * &self.w_q;
+        let K = X * &self.w_k;
+        let V = X * &self.w_v;
 
         self.x_cache = X.clone();
         self.q_cache = Q.clone();
@@ -64,6 +63,7 @@ impl MHA{
         self.v_cache = V.clone();
 
         let token_count = X.nrows();
+        self.attention_cache.clear();
 
         let mut head_attentions = DMatrix::<f64>::zeros(token_count, D_MODEL);
 
@@ -98,10 +98,11 @@ impl MHA{
         max_seq_length: usize
     ) -> DMatrix<f64>{
         let Q = decoder_x * &self.w_q;
-        let K  = encoder_out.clone() * &self.w_k;
-        let V = encoder_out.clone() * &self.w_v;
+        let K  = &encoder_out * &self.w_k;
+        let V = &encoder_out * &self.w_v;
 
         let token_count = Q.nrows();
+        self.attention_cache.clear();
 
         let mut head_attentions = DMatrix::<f64>::zeros(token_count, D_MODEL);
 
@@ -135,7 +136,7 @@ impl MHA{
         let num_sentences = token_count / max_seq_length;
         
         let mut result = DMatrix::<f64>::zeros(token_count, D_K );
-        let mut attentions = DMatrix::<f64>::zeros(token_count, D_K );
+        let mut attentions = DMatrix::<f64>::zeros(token_count, max_seq_length);
 
         for sentence in 0..num_sentences{
             // get sentence
@@ -158,68 +159,68 @@ impl MHA{
 
 
             result.view_mut((sentence_start, 0), (max_seq_length, D_K))
-            .copy_from(&(qk_block.clone()*v_block));
+            .copy_from(&(&qk_block*v_block));
         
-            attentions.view_mut((sentence_start, 0), (max_seq_length, D_K))
-            .copy_from(&(qk_block));
+            attentions.view_mut((sentence_start, 0), (max_seq_length, max_seq_length))
+            .copy_from(&qk_block);
 
         }
-        self.attention_cache = attentions;
+        self.attention_cache.push(attentions);
         result
     }
 
     pub fn backwards(&mut self, dldo: DMatrix<f64>, lr: f64) -> DMatrix<f64>{
-        // Using:
-        // Output O = H * w_o
-        // H = attention for each head accumulated
-        // H = A * V
-        // A = Softmax(S)
-        // S = QK/dk_sqrt
-        // Q, K, V = X * w_(q, k, v)
-
-        // dldh = dldo * dodh = dldo * w_o
-
-
-        // Pull up w_o gradient
-        let dldw_o = self.heads_cache.transpose() * dldo.clone();
-
-        // w_qkv gradients
+        let t = self.x_cache.nrows();
+        let l = self.attention_cache[0].ncols(); // max_seq_length
+        let num_sentences = t / l;
         let dk_sqrt = (D_K as f64).sqrt();
-        
-        // w_v grads
-        let dldh = dldo * self.w_o.transpose();
-        let dldv = self.attention_cache.transpose() * dldh.clone();
-        let dldw_v = self.x_cache.transpose() * dldv.clone();
 
-        //w_q and w_k
-        let mut a = self.attention_cache.clone();
-        let attention_rows = self.attention_cache.nrows();
-        let attention_cols = self.attention_cache.ncols();
+        let dldw_o = self.heads_cache.transpose() * &dldo;
+        let dldh = dldo * self.w_o.transpose(); // t x D_MODEL
 
-        let dhda = self.v_cache.transpose();
-        let dlda = dldh.clone()*dhda;
-        let mut dlds = DMatrix::<f64>::zeros(attention_rows, attention_cols);
-        for i in 0..attention_rows{
-            // apparently instead of computing the jacobian for each row
-            // u can just do
-            // dlds row = a row * (dlda row- sum of the dlda row * a)
-            // for each row
-            let a_i = a.row(i);
-            let dlda_i = dlda.row(i);
-            let combo = (a_i * dlda_i.transpose())[(0,0)];
-            let dlds_i = a_i * dlda_i.map(| f | f - combo );
-            dlds.row_mut(i).copy_from(&dlds_i);
+        let mut dldq = DMatrix::<f64>::zeros(t, D_MODEL);
+        let mut dldk = DMatrix::<f64>::zeros(t, D_MODEL);
+        let mut dldv = DMatrix::<f64>::zeros(t, D_MODEL);
+
+        for head in 0..N_HEADS {
+            let col = head * D_K;
+            for s in 0..num_sentences {
+                let r0 = s * l;
+                let a = self.attention_cache[head].view((r0, 0), (l, l)).into_owned();
+                let q = self.q_cache.view((r0, col), (l, D_K)).into_owned();
+                let k = self.k_cache.view((r0, col), (l, D_K)).into_owned();
+                let v = self.v_cache.view((r0, col), (l, D_K)).into_owned();
+                let dh = dldh.view((r0, col), (l, D_K)).into_owned();
+
+                let dv = a.transpose() * &dh;     // l x D_K
+                let da = &dh * v.transpose();     // l x l
+
+                // softmax backward, row by row: ds = a * (da - sum(a * da))
+                let mut ds = DMatrix::<f64>::zeros(l, l);
+                for i in 0..l {
+                    let dot: f64 = (0..l).map(|j| a[(i, j)] * da[(i, j)]).sum();
+                    for j in 0..l {
+                        ds[(i, j)] = a[(i, j)] * (da[(i, j)] - dot);
+                    }
+                }
+
+                let dq = (&ds * &k) / dk_sqrt;
+                let dk_ = (ds.transpose() * &q) / dk_sqrt;
+
+                dldq.view_mut((r0, col), (l, D_K)).copy_from(&dq);
+                dldk.view_mut((r0, col), (l, D_K)).copy_from(&dk_);
+                dldv.view_mut((r0, col), (l, D_K)).copy_from(&dv);
+            }
         }
 
-        let dldq = dlds.clone() * self.k_cache.clone() / dk_sqrt;
-        let dldk = dlds.transpose() * self.q_cache.clone() / dk_sqrt;
-        let dldw_q = self.x_cache.transpose() * dldq.clone();
-        let dldw_k = self.x_cache.transpose() * dldk.clone(); 
+        let x_t = self.x_cache.transpose();
+        let dldw_q = &x_t * &dldq;
+        let dldw_k = &x_t * &dldk;
+        let dldw_v = &x_t * &dldv;
 
-        let dldx = 
-                dldv * self.w_v.transpose() + 
-                dldk * self.w_k.transpose() + 
-                dldq * self.w_q.transpose();
+        let dldx = &dldv * self.w_v.transpose()
+                 + &dldk * self.w_k.transpose()
+                 + &dldq * self.w_q.transpose();
 
         self.w_o -= lr * dldw_o;
         self.w_k -= lr * dldw_k;
@@ -349,7 +350,7 @@ impl FeedForward{
         for row in dldo.row_iter() {
             dldb2 += row;
         }
-        let dldw2 = self.r_cache.transpose() * dldo.clone();
+        let dldw2 = self.r_cache.transpose() * &dldo;
 
         let drda = self.a_cache.clone().map(|x| (x > 0.0) as i64 as f64); // k x dff
         let dlda = (dldo * self.w2.transpose()).component_mul(&drda); // k x d_ff
@@ -490,7 +491,8 @@ impl Embedder{
 pub struct Normalizer{
     gamma : DVector<f64>, // rescale (can be learned via backwards)
     beta : DVector<f64>, // shift (can be learned via backwards)
-
+    sigma_inverse_cache: DVector<f64>,
+    x_hat_cache: DMatrix<f64>,
     
 }
 
@@ -499,25 +501,35 @@ impl Normalizer{
     pub fn new() -> Normalizer{
         Normalizer{
             gamma: DVector::<f64>::repeat(D_MODEL, 1.0),
-            beta : DVector::<f64>::zeros(D_MODEL)
+            beta : DVector::<f64>::zeros(D_MODEL),
+            sigma_inverse_cache: DVector::<f64>::zeros(0),
+            x_hat_cache: DMatrix::<f64>::zeros(0, D_MODEL),
         }
     }
 
 
-    pub fn x_hat(&self, x : Matrix<f64, Const<1>, Dyn, ViewStorage<'_, f64, Const<1>, Dyn, Const<1>, Dyn>>) 
-    -> Matrix<f64, Const<1>, Dyn, VecStorage<f64, Const<1>, Dyn>>{
-        let mu = x.mean();
-        let variance = x.variance() + 1e-3;
-        x.map(|k| (k - mu) / variance.sqrt())
-    }
-
-    pub fn normalize_forward(&self, X : DMatrix<f64>) -> DMatrix<f64>{
+    pub fn normalize_forward(&mut self, X : DMatrix<f64>) -> DMatrix<f64>{
         // Input X is always gonna be the output of a sublayer added with their own input
         let mut output = DMatrix::<f64>::zeros(X.nrows(), X.ncols());
 
-        for i in 0..X.nrows(){
+        let x_rows = X.nrows();
+        // conditional rebase of cache
+        if self.x_hat_cache.nrows() != x_rows{
+            self.x_hat_cache = DMatrix::<f64>::zeros(x_rows, D_MODEL);
+            self.sigma_inverse_cache = DVector::<f64>::zeros(x_rows);
+        }
+
+
+        for i in 0..x_rows{
             let x = X.row(i);
-            let x_hat = self.x_hat(x);
+
+            // ---  evaluate x_hat ---
+            let mu = x.mean();
+            let sigma_inverse = 1.0 / (x.variance() + 1e-3).sqrt();  // just 1/sigma with a slack
+            let x_hat = x.map(|k| (k - mu) * sigma_inverse);      
+            //--- caching ---
+            self.sigma_inverse_cache[i] = sigma_inverse;
+            self.x_hat_cache.row_mut(i).copy_from(&x_hat); 
 
             let y = x_hat.component_mul(&self.gamma.transpose()) + self.beta.transpose();
             // We use component_mul with x_hat and gamma because we want to keep y as a 1 * N column vector
@@ -544,29 +556,29 @@ impl Normalizer{
         for i in 0..num_tokens{
             let dldy_row = dldy.row(i);
             let x = X.row(i);
-            let x_hat = self.x_hat(x);
+            let x_hat = self.x_hat_cache[i];
 
             // for dldx
-            let denominator = 1. / ( D_MODEL_float * (x.variance() + 1e-3).sqrt());
+            let denominator = 1. * self.sigma_inverse_cache[i] / D_MODEL_float;
 
             let mut a = vec![0.0; D_MODEL]; // actually more efficient than initializing DVector Zeros
             let mut b = 0.0;
             let mut c_sum = 0.0;
 
             for j in 0..D_MODEL{
-                dldgamma[j] += dldy[(i, j)] * x_hat[j];
+                dldgamma[j] += dldy[(i, j)] * self.x_hat_cache[j];
                 dldbeta[j] += dldy[(i, j)] ;
 
                 let dldx_hat_j = dldy_row[j] * self.gamma[j];
 
                 a[j] = dldx_hat_j * D_MODEL_float;
                 b += dldx_hat_j;
-                c_sum += dldx_hat_j * x_hat[j];
+                c_sum += dldx_hat_j * self.x_hat_cache[j];
 
             }       
 
             for j in 0..D_MODEL{
-                let c = c_sum * x_hat[j];
+                let c = c_sum * self.x_hat_cache[j];
                 dldx[(i, j)] = (a[j] - b - c) * denominator;
             }
 
@@ -613,7 +625,7 @@ impl EncoderLayer{
     pub fn forward(&mut self, X : DMatrix<f64>, max_seq_length: usize) -> DMatrix<f64>{
     
         //sublayer1
-        let sub_layer_mha = self.mha.mha_forward(X.clone(), max_seq_length) + X;
+        let sub_layer_mha = self.mha.mha_forward(&X, max_seq_length) + X;
         self.sub_layer_mha = sub_layer_mha.clone();
         let normalized_mha_sub_layer = self.norm_mha.normalize_forward(sub_layer_mha);
         self.normalized_mha = normalized_mha_sub_layer.clone();
@@ -634,7 +646,7 @@ impl EncoderLayer{
         let dldx_ffn = self.ffn.backwards(dldffn.clone(), lr);
         let dldn1 = dldx_ffn + dldn1res;
         //dldx is the same thing and we gonna feed it to the previous layer
-        let (dldmhafeed, dldgamma_2, dldbeta_2) = self.norm_mha.backward_norm(self.normalized_mha.clone(), dldn1);
+        let (dldmhafeed, dldgamma_2, dldbeta_2) = self.norm_mha.backward_norm(self.sub_layer_mha.clone(), dldn1);
         let dldx_mha = self.mha.backwards(dldmhafeed.clone(), lr);
         let dldx = dldx_mha + dldmhafeed;
         dldx
@@ -799,4 +811,3 @@ impl Encoder{
 
 
 // INITIALIZE THE ABOVE N TIMES
-

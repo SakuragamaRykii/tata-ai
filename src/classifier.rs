@@ -1,6 +1,3 @@
-
-
-
 use std::print;
 
 use nalgebra::{DMatrix, RowDVector};
@@ -25,6 +22,7 @@ pub struct Classifier{
     encoder: Encoder,
     c_cache : DMatrix<f64>,
     output_cache : DMatrix<f64>,
+    seq_len : usize,
 }
 
 impl Classifier{
@@ -78,7 +76,7 @@ impl Classifier{
         let encoder = Encoder::new(embedder, encoder_layers);
         let output_cache = DMatrix::<f64>::zeros(3, 1)
 ;
-        Classifier{num_classes, n, w, b, encoder, output_cache, c_cache : DMatrix::<f64>::zeros(1, 1),}
+        Classifier{num_classes, n, w, b, encoder, output_cache, c_cache : DMatrix::<f64>::zeros(1, 1), seq_len : context_length}
     }
 
     pub fn forward(&mut self, inputs: DMatrix<usize>) -> DMatrix<f64>{
@@ -86,6 +84,7 @@ impl Classifier{
         // max seq length to be predetermined?
         let batch_size = inputs.nrows();
         let max_seq_length = inputs.ncols();
+        self.seq_len = max_seq_length;
 
         let encode = self.encoder.forward(inputs, max_seq_length);
         //outputs (batch_size*max_seq_length) x D_MODEL
@@ -111,29 +110,27 @@ impl Classifier{
     }
 
 
-    pub fn backwards(&mut self, actual_class: usize, lr: f64){
-        let loss =  -&self.output_cache[actual_class].log10();
-        println!("Loss = {}", loss);
-        // dl / dw_q, w_k, w_v, w_o, w1, w1, b1, b2, w, b
-        // per layer
+    pub fn backwards(&mut self, actual_class: usize, sample_weight: f64, lr: f64){
+        // single-sentence (batch = 1) training step
+
+        // softmax + cross-entropy: dL/dz = p - y_onehot
         let mut dldz = self.output_cache.clone();
-        //z = cw + b    in other words cls applied
-        // dzdw = c
-        // dldw = c_trans * dldz
-        // dldb = dldz
-        // dldc = dldz * w_trans
-        let dldw = self.c_cache.transpose() * dldz.clone();
-        let dldb = dldz.clone();
-        let dldc = dldz * self.w.transpose();
+        dldz[(0, actual_class)] -= 1.0;
+        dldz *= sample_weight;
+
+        let dldw = self.c_cache.transpose() * &dldz;
+        let mut dldb = RowDVector::<f64>::zeros(self.num_classes);
+        for row in dldz.row_iter() { dldb += row; }
+        let dldc = &dldz * self.w.transpose(); // computed BEFORE w is updated
 
         self.w -= lr * dldw;
-        self.b -= lr * dldb; 
+        self.b -= lr * dldb;
 
-        let mut dldo = DMatrix::<f64>::zeros(
-            self.c_cache.nrows(),
-            self.c_cache.ncols()
-        );
-        dldo.row_mut(0).copy_from(&dldc.row(0));
+        // only the <CLS> row of each sentence receives gradient; shape must match encoder output
+        let mut dldo = DMatrix::<f64>::zeros(dldc.nrows() * self.seq_len, D_MODEL);
+        for i in 0..dldc.nrows() {
+            dldo.row_mut(i * self.seq_len).copy_from(&dldc.row(i));
+        }
         self.encoder.backwards(dldo, lr);
     }
 
