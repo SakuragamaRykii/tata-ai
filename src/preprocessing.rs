@@ -245,7 +245,13 @@ impl Tokenizer{
         masks
     }
 
-
+    pub fn from_parts(inverse_vocab: Vec<String>, merge_history: Vec<(String, String)>) -> Tokenizer {
+        let mut vocabulary = HashMap::new();
+        for (i, t) in inverse_vocab.iter().enumerate() {
+            vocabulary.insert(t.clone(), i);
+        }
+        Tokenizer { vocabulary, inverse_vocab, merge_history }
+    }
 }
 
 

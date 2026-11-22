@@ -4,55 +4,62 @@ mod math;
 mod preprocessing;
 mod classifier;
 
-use classifier::Classifier;
+use classifier::{Classifier, ClassifierWeights};
 use nalgebra::DMatrix;
 use preprocessing::{tokenize_initial, Tokenizer};
-use rand::{rng, RngExt};
+use rand::{RngExt, SeedableRng, rngs::StdRng}; 
+use std::time::Instant;
+
+use std::io::{self, Write, BufRead};
+use serde_json;
+
+const MODEL_PATH: &str = "model.json";
+
 
 // ---- hyperparameters ----
-const K_EPOCHS: usize = 20;
-const LR: f64 = 0.0025;
+const K_EPOCHS: usize = 15;
+const LR: f64 = 0.004;
 const N_LAYERS: usize = 3;
-const TARGET_VOCAB: usize = 1000;
+const TARGET_VOCAB: usize = 1200;
 const SEQ_LEN: usize = 48;
-const NEUTRAL_THRESHOLD: f64 = 0.30;
-const TRAIN_FRAC: f64 = 0.8;
+const NEUTRAL_THRESHOLD: f64 = 0.65;
+const TRAIN_FRAC: f64 = 0.75;
+const WEIGHT_DECAY: f64 = 0.01;
+const N_SAMPLES: usize = 20000;
 
-// 7 classes after pruning [disgust, anxiety, love]
-const EMOTIONS: [&str; 7] = [
-    "happy", "sad", "angry", "fear", "surprise", "excitement", "embarrassment",
+const EMOTIONS: [&str; 5] = [
+    "happy", "sad", "angry", "fear", "love"//, "neutral"
 ];
 
-// GoEmotions label id -> our class id (1-based). None = drop this sample.
 const GO_EMOTIONS_TO_CLASS: [Option<usize>; 28] = [
-    None,     // 0  admiration   -> (was love, pruned)
-    Some(1),  // 1  amusement    -> happy
-    Some(3),  // 2  anger        -> angry
-    Some(3),  // 3  annoyance    -> angry
+    None,     // 0  admiration
+    Some(1),  // 1  amusement     -> happy
+    Some(3),  // 2  anger         -> angry
+    Some(3),  // 3  annoyance     -> angry
     None,     // 4  approval
-    None,     // 5  caring       -> (was love, pruned)
-    None,     // 6  confusion
+    Some(5),     // 5  caring
+    None,  // 6  confusion     -> fear        (see note below)
     None,     // 7  curiosity
-    None,     // 8  desire       -> (was love, pruned)
-    Some(2),  // 9  disappointment -> sad
-    None,     // 10 disapproval  -> (was disgust, pruned)
-    None,     // 11 disgust      -> (pruned)
-    Some(7),  // 12 embarrassment -> embarrassment
-    Some(6),  // 13 excitement   -> excitement
-    Some(4),  // 14 fear         -> fear
-    None,     // 15 gratitude    -> (was love, pruned)
-    Some(2),  // 16 grief        -> sad
-    Some(1),  // 17 joy          -> happy
-    None,     // 18 love         -> (pruned)
-    None,     // 19 nervousness  -> (was anxiety, pruned)
-    Some(1),  // 20 optimism     -> happy
-    Some(1),  // 21 pride        -> happy
+    None,     // 8  desire
+    None,  // 9  disappointment-> sad
+    None,     // 10 disapproval
+    None,  // 11 disgust       -> fear        (see note below)
+    None,  // 12 embarrassment -> embarrassment  (was Some(7))
+    Some(1),     // 13 excitement    (dropped)
+    Some(4),  // 14 fear          -> fear
+    None,     // 15 gratitude
+    Some(2),  // 16 grief         -> sad
+    Some(1),  // 17 joy           -> happy
+    Some(5),     // 18 love
+    None,     // 19 nervousness
+    Some(1),  // 20 optimism      -> happy
+    Some(1),  // 21 pride         -> happy
     None,     // 22 realization
-    Some(1),  // 23 relief       -> happy
-    Some(2),  // 24 remorse      -> sad
-    Some(2),  // 25 sadness      -> sad
-    Some(5),  // 26 surprise     -> surprise
-    None,     // 27 neutral
+    Some(1),  // 23 relief        -> happy
+    None,  // 24 remorse       -> sad
+    Some(2),  // 25 sadness       -> sad
+    None,     // 26 surprise      (dropped)
+    None//Some(6),     // 27 neutral
 ];
 
 fn load_go_emotions_tsv(path: &str, limit: usize) -> Vec<(String, usize)> {
@@ -75,9 +82,10 @@ fn load_go_emotions_tsv(path: &str, limit: usize) -> Vec<(String, usize)> {
 }
 
 fn encode_fixed(tok: &Tokenizer, s: &str) -> DMatrix<usize> {
+    let pad = tok.vocabulary["<PAD>"];
     let mut ids = tok.encode(s.to_string());
     ids.truncate(SEQ_LEN);
-    while ids.len() < SEQ_LEN { ids.push(tok.vocabulary["<PAD>"]); }
+    while ids.len() < SEQ_LEN { ids.push(pad); }
     DMatrix::from_row_slice(1, SEQ_LEN, &ids)
 }
 
@@ -157,12 +165,12 @@ fn class_weights(counts: &[usize]) -> Vec<f64> {
     let mean: f64 = w.iter().sum::<f64>() / n as f64;
     if mean > 0.0 { for v in w.iter_mut() { *v /= mean; } }
     // clamp: never weight a class more than 10x average
-    for v in w.iter_mut() { if *v > 10.0 { *v = 10.0; } }
+    for v in w.iter_mut() { if *v > 1.5 { *v = 1.5; } }
     w
 }
 
 fn main() {
-    let mut data = load_go_emotions_tsv("dataset/sub_dataset.tsv", 5000);
+    let mut data = load_go_emotions_tsv("dataset/sub_dataset.tsv", N_SAMPLES);
     println!("loaded {} usable samples (from GoEmotions tsv)", data.len());
 
     let mut counts = vec![0usize; EMOTIONS.len()];
@@ -172,7 +180,7 @@ fn main() {
         println!("  {:<15} {}", name, counts[i]);
     }
 
-    let mut r = rng();
+    let mut r  = StdRng::seed_from_u64(42);
     for i in (1..data.len()).rev() { let j = r.random_range(0..=i); data.swap(i, j); }
     let n_train = (data.len() as f64 * TRAIN_FRAC) as usize;
     let (train, test) = data.split_at(n_train);
@@ -197,8 +205,9 @@ fn main() {
     println!("vocab size = {}", tok.vocabulary.len());
 
     let mut model = Classifier::empty(EMOTIONS.len(), N_LAYERS, tok.vocabulary.len(), 1, SEQ_LEN);
-
+    let train_start = Instant::now();
     for epoch in 1..=K_EPOCHS {
+        let epoch_start = Instant::now();
         let mut total_loss = 0.0;
         let mut correct = 0;
         for (s, y) in train.iter() {
@@ -207,15 +216,19 @@ fn main() {
             let w = weights[*y];
             total_loss += -w * probs[(0, *y)].max(1e-12).ln();
             if argmax(&row_vec(&probs)) == *y { correct += 1; }
-            model.backwards(*y, weights[*y], LR);   // scale the gradient too
+            model.backwards(*y, weights[*y], LR, WEIGHT_DECAY);   // scale the gradient too
         }
         // report weighted loss normalized by total weight so epochs are comparable
         let total_w: f64 = train.iter().map(|(_, y)| weights[*y]).sum();
-        println!("epoch {:>2}/{} | wloss {:.4} | train acc {:.1}%", epoch, K_EPOCHS,
-                 total_loss / total_w,
-                 100.0 * correct as f64 / train.len() as f64);
+        println!(
+            "epoch {:>2}/{} | wloss {:.4} | train acc {:.1}% | {:.1}s",
+            epoch, K_EPOCHS,
+            total_loss / total_w,
+            100.0 * correct as f64 / train.len() as f64,
+            epoch_start.elapsed().as_secs_f64()
+        );
     }
-
+    println!("training took {:.1}s", train_start.elapsed().as_secs_f64());
     // held-out evaluation
     let mut correct = 0;
     let mut truth = Vec::with_capacity(test.len());
@@ -269,5 +282,74 @@ fn main() {
         let label = if conf < NEUTRAL_THRESHOLD { "neutral (0)".to_string() }
                     else { format!("{} ({})", EMOTIONS[best], best + 1) };
         println!("{:<50} -> {:<18} conf {:.2}", s, label, conf);
+    }
+
+    let cw = model.to_weights(&tok);
+    save_model(&cw, MODEL_PATH);
+
+    // (optional) demonstrate round-trip load and run probes with the reloaded model
+    let (cw2, tok2) = load_model(MODEL_PATH);
+    let mut reloaded = Classifier::from_weights(&cw2, SEQ_LEN);
+    // sanity check: reloaded should match
+    {
+        let a = row_vec(&model.forward(encode_fixed(&tok, "you are absolutely amazing")));
+        let b = row_vec(&reloaded.forward(encode_fixed(&tok2, "you are absolutely amazing")));
+        let diff: f64 = a.iter().zip(&b).map(|(x,y)| (x-y).abs()).sum();
+        println!("reload sanity diff = {:.3e}", diff);
+    }
+
+    // ---- interactive console loop ----
+    interactive_loop(reloaded, tok2, NEUTRAL_THRESHOLD);
+}
+
+
+
+
+fn save_model(cw: &ClassifierWeights, path: &str) {
+    let s = serde_json::to_string(cw).expect("serialize");
+    std::fs::write(path, s).expect("write model");
+    println!("saved model -> {}", path);
+}
+
+fn load_model(path: &str) -> (ClassifierWeights, Tokenizer) {
+    let s = std::fs::read_to_string(path).expect("read model");
+    let cw: ClassifierWeights = serde_json::from_str(&s).expect("parse model");
+    let tok = Tokenizer::from_parts(cw.vocab.clone(), cw.merge_history.clone());
+    (cw, tok)
+}
+
+fn interactive_loop(mut model: Classifier, tok: Tokenizer, threshold: f64) {
+    println!("\n=== interactive mode (type a sentence, Ctrl+D / Ctrl+C to quit) ===");
+    let stdin = io::stdin();
+    loop {
+        print!("> ");
+        io::stdout().flush().ok();
+        let mut line = String::new();
+        match stdin.lock().read_line(&mut line) {
+            Ok(0) => { println!(); break; }             // EOF
+            Ok(_) => {}
+            Err(e) => { eprintln!("input error: {}", e); break; }
+        }
+        let s = line.trim();
+        if s.is_empty() { continue; }
+
+        let probs = model.forward(encode_fixed(&tok, s));
+        let row = row_vec(&probs);
+        let best = argmax(&row);
+        let conf = row[best];
+
+        // print full distribution too, it's useful
+        print!("  [");
+        for (i, p) in row.iter().enumerate() {
+            if i > 0 { print!(", "); }
+            print!("{}:{:.2}", EMOTIONS[i], p);
+        }
+        println!("]");
+
+        if conf < threshold {
+            println!("  -> neutral (conf {:.2} below {:.2})", conf, threshold);
+        } else {
+            println!("  -> {} (conf {:.2})", EMOTIONS[best], conf);
+        }
     }
 }

@@ -49,4 +49,22 @@ pub fn softmax_inplace(d: &mut DMatrix<f64>, n_rows: usize){
 
 }
 
+pub fn mat_to_vec(m: &DMatrix<f64>) -> Vec<Vec<f64>> {
+    (0..m.nrows()).map(|i| m.row(i).iter().cloned().collect()).collect()
+}
+pub fn vec_to_mat(v: &[Vec<f64>]) -> DMatrix<f64> {
+    let rows = v.len();
+    let cols = if rows == 0 { 0 } else { v[0].len() };
+    DMatrix::from_fn(rows, cols, |i, j| v[i][j])
+}
+pub fn row_to_vec(v: &RowDVector<f64>) -> Vec<f64> { v.iter().cloned().collect() }
+pub fn vec_to_row(v: &[f64]) -> RowDVector<f64> { RowDVector::from_row_slice(v) }
+pub fn dvec_to_vec(v: &nalgebra::DVector<f64>) -> Vec<f64> { v.iter().cloned().collect() }
+pub fn vec_to_dvec(v: &[f64]) -> nalgebra::DVector<f64> { nalgebra::DVector::from_row_slice(v) }
 
+
+// L2
+pub fn l2_grad(gradient: &DMatrix<f64>, weight:&DMatrix<f64>, lambda: f64) -> DMatrix<f64>{
+    gradient + (weight * lambda)
+    
+}
