@@ -64,8 +64,8 @@ pub struct ClassifierWeights {
 pub struct Classifier{
     num_classes: usize,
     n: usize,
-    w: DMatrix<f64>, // D_MODEL x num_classes, for crunching encoder output into class
-    b: RowDVector<f64>, // 1 x num_classes. 
+    w: Parameter, // D_MODEL x num_classes, for crunching encoder output into class
+    b: Parameter, // 1 x num_classes. 
     encoder: Encoder,
     c_cache : DMatrix<f64>,
     output_cache : DMatrix<f64>,
@@ -76,8 +76,8 @@ impl Classifier{
 
     pub fn empty(num_classes: usize, n: usize, vocab_size: usize, batch_size: usize, context_length: usize, ) -> Classifier{
         //Innit w and b
-        let w = xavier_init(D_MODEL, num_classes);
-        let b = RowDVector::<f64>::zeros(num_classes);
+        let w = Parameter::new(xavier_init(D_MODEL, num_classes));
+        let b = Parameter::new(DMatrix::<f64>::zeros(num_classes));
 
         // Innit Encoder
         let mut encoder_layers = Vec::<EncoderLayer>::with_capacity(n);
@@ -145,8 +145,8 @@ impl Classifier{
             cls_accum.set_row(i, &cls);
         }
         self.c_cache = cls_accum.clone();
-        let mut cls_applied = cls_accum * &self.w;
-        for mut row in cls_applied.row_iter_mut(){row += &self.b;}
+        let mut cls_applied = cls_accum * &self.w.w;
+        for mut row in cls_applied.row_iter_mut(){row += &self.b.w;}
 
         softmax_inplace(&mut cls_applied, batch_size);
         self.output_cache = cls_applied.clone();
@@ -157,7 +157,7 @@ impl Classifier{
     }
 
 
-    pub fn backwards(&mut self, actual_class: usize, sample_weight: f64, lr: f64, lambda:f64){
+    pub fn backwards(&mut self, actual_class: usize, sample_weight: f64){
         // single-sentence (batch = 1) training step
 
         // softmax + cross-entropy: dL/dz = p - y_onehot
@@ -172,19 +172,24 @@ impl Classifier{
         let dldw = self.c_cache.transpose() * &dldz;
         let mut dldb = RowDVector::<f64>::zeros(self.num_classes);
         for row in dldz.row_iter() { dldb += row; }
-        let dldc = &dldz * self.w.transpose(); // computed BEFORE w is updated
+        let dldc = &dldz * self.w.w.transpose(); // computed BEFORE w is updated
 
-        self.w -= lr * l2_grad(&dldw, &self.w, lambda);
-        self.b -= lr * dldb;
+        self.w.g = dldw;
+        self.b.g = dldb;
 
         // only the <CLS> row of each sentence receives gradient; shape must match encoder output
         let mut dldo = DMatrix::<f64>::zeros(dldc.nrows() * self.seq_len, D_MODEL);
         for i in 0..dldc.nrows() {
             dldo.row_mut(i * self.seq_len).copy_from(&dldc.row(i));
         }
-        self.encoder.backwards(dldo, lr, lambda);
+        self.encoder.backwards(dldo);
     }
 
+    pub fn step(&mut self, lr: f64){ 
+        self.w.adam(lr);
+        self.b.adam(lr);
+        self.encoder.step(lr);
+    }
 
     pub fn to_weights(&self, tok:&Tokenizer) -> ClassifierWeights {
         let layers: Vec<LayerWeights> = self.encoder.get_layers().iter().map(|l| {

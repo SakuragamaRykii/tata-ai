@@ -2,6 +2,7 @@ use std::num;
 
 use nalgebra::*;
 //use cudarc::*;
+use crate::config::{ALPHA, BETA, EPSILON};
 
 
 pub fn relu(d : DMatrix<f64>) -> DMatrix<f64> {
@@ -49,6 +50,8 @@ pub fn softmax_inplace(d: &mut DMatrix<f64>, n_rows: usize){
 
 }
 
+// --- Matrix Bullshit ----
+
 pub fn mat_to_vec(m: &DMatrix<f64>) -> Vec<Vec<f64>> {
     (0..m.nrows()).map(|i| m.row(i).iter().cloned().collect()).collect()
 }
@@ -68,3 +71,50 @@ pub fn l2_grad(gradient: &DMatrix<f64>, weight:&DMatrix<f64>, lambda: f64) -> DM
     gradient + (weight * lambda)
     
 }
+
+
+// ---- Parameter with ADAM ----
+
+pub struct Adam{
+    
+
+}
+
+
+pub struct Parameter{
+    pub w: DMatrix<f64>,
+    pub g: DMatrix<f64>,
+    m: DMatrix<f64>,
+    v: DMatrix<f64>,
+    t: i32,
+
+}
+impl Parameter{
+    pub struct new(&self, w: DMatrix<f64>) -> Parameter{
+        let height, width = w.shape();
+        Parameter{
+            w,
+            g: DMatrix::<f64>::zeros(height, width),
+            m: DMatrix::<f64>::zeros(height, width),
+            v: DMatrix::<f64>::zeros(height, width),
+            t: 0,
+        }
+    }
+
+    pub fn adam(&mut self, lr: f64){
+        self.t += 1;
+
+        self.m = ALPHA * &self.m + (1. - ALPHA) * &self.g;
+        self.v = BETA * &self.v + (1. - BETA) * &self.g.component_mul(&self.g);
+        
+        // bias correction 
+        // here so that the first few weight changes arent cooked
+        let &m_hat = self.m / (1. - ALPHA.powi(self.t));
+        let &v_hat = self.v / (1. - BETA.powi(self.t));
+
+        self.w -= lr * m_hat.component_div(&v_hat.map(|x| x.sqrt()+EPSILON));
+        self.g.fill(0.0);
+    }
+       
+}
+// 
