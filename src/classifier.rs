@@ -4,7 +4,7 @@ use nalgebra::{DMatrix, RowDVector};
 use rand::{RngExt, rng};
 use serde::{Deserialize, Serialize};
 
-use crate::{classifier, math::*, preprocessing::Tokenizer, transformer::*};
+use crate::{classifier, math::*, preprocessing::Tokenizer, transformer::*, config::{D_MODEL}};
 
 // ---- serializable weight structs ----
 
@@ -103,8 +103,8 @@ impl Classifier{
             let ffn = FeedForward::new(
                 xavier_init(D_MODEL, d_ff),
                 xavier_init(d_ff, D_MODEL),
-                RowDVector::<f64>::zeros(d_ff),
-                RowDVector::<f64>::zeros(D_MODEL), 
+                DMatrix::<f64>::zeros(1,d_ff),
+                DMatrix::<f64>::zeros(1, D_MODEL), 
                 d_ff);
             let norm_ffn = Normalizer::new();
 
@@ -236,7 +236,7 @@ impl Classifier{
                 vec_to_mat(&l.mha.w_v), vec_to_mat(&l.mha.w_o),
             );
             let norm_mha = Normalizer::from_weights(
-                vec_to_dvec(&l.norm_mha.gamma), vec_to_dvec(&l.norm_mha.beta));
+                &l.norm_mha.gamma, vec_to_mat(&l.norm_mha.beta));
 
             let ffn = FeedForward::new(
                 vec_to_mat(&l.ffn.w1), vec_to_mat(&l.ffn.w2),

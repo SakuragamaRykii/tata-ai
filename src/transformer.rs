@@ -359,7 +359,7 @@ impl FeedForward{
         let dldw2 = self.r_cache.transpose() * &dldo;
 
         let drda = self.a_cache.clone().map(|x| (x > 0.0) as i64 as f64); // k x dff
-        let dlda = (dldo * self.w2.transpose()).component_mul(&drda); // k x d_ff
+        let dlda = (dldo * self.w2.w.transpose()).component_mul(&drda); // k x d_ff
         let dldw1 = self.x_cache.transpose() * &dlda;
 
         let mut dldb1 = RowDVector::<f64>::zeros(self.d_ff);
@@ -367,12 +367,12 @@ impl FeedForward{
             dldb1 += row;
         }
 
-        let dldx = dlda * self.w1.transpose();
+        let dldx = dlda * self.w1.w.transpose();
 
-        self.w1.g = &dldw1;
-        self.w2.g = &dldw2;
-        self.b1.g = &dldb1;
-        self.b2.g = &dldb2;
+        self.w1.g = dldw1;
+        self.w2.g = dldw2;
+        self.b1.g = dldb1;
+        self.b2.g = dldb2;
         //  d_ff x D_MODEL
         dldx
         // a = X * w1 + b1
@@ -455,7 +455,7 @@ impl Embedder{
         self.embed_layer.table()
     }
 
-    pub fn embed_forward(&self, input_ids : &DMatrix<usize>) -> DMatrix<f64> { //, embed_table: DMatrix<f64>) -> DMatrix<f64>{
+    pub fn embed_forward(&mut self, input_ids : &DMatrix<usize>) -> DMatrix<f64> { //, embed_table: DMatrix<f64>) -> DMatrix<f64>{
         //input_ids : batch_size * sentence_length matrix
         let batch_size = input_ids.nrows();
         let max_seq_length : usize = input_ids.ncols();
@@ -519,9 +519,9 @@ impl Embedder{
         }
     }
 
-    pub fn project_decoder_out(&self, decoder_output: DMatrix<f64>) -> DMatrix<f64>{
-        decoder_output * self.embed_layer.table.transpose()
-    }
+    // pub fn project_decoder_out(&self, decoder_output: DMatrix<f64>) -> DMatrix<f64>{
+    //     decoder_output * self.embed_layer.table.transpose()
+    // }
 
 }
 
@@ -545,13 +545,14 @@ impl Normalizer{
         }
     }
 
-    pub fn get_weights(&self) -> (DVector<f64>, DVector<f64>) {
+    pub fn get_weights(&self) -> (DMatrix<f64>, DMatrix<f64>) {
         (self.gamma.w.clone(), self.beta.w.clone())
     }
     pub fn from_weights(gamma: DMatrix::<f64>, beta: DMatrix::<f64>) -> Normalizer {
         let d = gamma.len();
         Normalizer {
-            Parameter::new(gamma), Parameter::new(beta),
+            gamma: Parameter::new(gamma),
+            beta:  Parameter::new(beta),
             sigma_inverse_cache: DVector::<f64>::zeros(0),
             x_hat_cache: DMatrix::<f64>::zeros(0, d),
         }
@@ -580,7 +581,7 @@ impl Normalizer{
             self.sigma_inverse_cache[i] = sigma_inverse;
             self.x_hat_cache.row_mut(i).copy_from(&x_hat); 
 
-            let y = x_hat.component_mul(&self.gamma.w) + self.beta.w;
+            let y = x_hat.component_mul(&self.gamma.w) + &self.beta.w;
             // We use component_mul with x_hat and gamma because we want to keep y as a 1 * N column vector
             // cuz if just multiply x_hat with gamma normally it becomes an N * N matrix which gets applied to 
             // each row of output (line below me) and that makes no sense

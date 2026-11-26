@@ -13,9 +13,8 @@ from transformers import (
 
 MODEL_ID = "nvidia/nemotron-3.5-asr-streaming-0.6b"
 LANGUAGE = "en-US"
-LOOKAHEAD = 6  # 560ms streaming latency
+LOOKAHEAD = 6  # 560ms latency
 
-# Audio queue populated by microphone callback
 audio_queue = queue.Queue()
 
 
@@ -27,7 +26,6 @@ def audio_callback(indata, frames, time, status):
 
 
 def get_audio(num_samples, audio):
-    """Collect microphone samples until enough audio is available."""
     while len(audio) < num_samples:
         audio = np.concatenate([audio, audio_queue.get()])
 
@@ -58,14 +56,13 @@ def main():
 
     audio = np.empty(0, dtype=np.float32)
 
-    # Start microphone capture
     with sd.InputStream(
         samplerate=sample_rate,
         channels=1,
         dtype="float32",
         callback=audio_callback,
     ):
-        # Collect the initial audio chunk
+
         audio = get_audio(
             processor.num_samples_first_audio_chunk,
             audio,
@@ -86,7 +83,8 @@ def main():
         )
 
         def input_features_generator():
-            # First chunk
+            nonlocal audio
+
             yield first_chunk_inputs.input_features[
                 :, :processor.num_mel_frames_first_audio_chunk, :
             ]
@@ -98,7 +96,6 @@ def main():
 
             start_idx = mel_frame_idx * hop_length - n_fft // 2
 
-            # Continuously process new microphone audio
             while True:
                 end_idx = start_idx + processor.num_samples_per_audio_chunk
 
@@ -120,7 +117,6 @@ def main():
                 mel_frame_idx += processor.num_mel_frames_per_audio_chunk
                 start_idx = mel_frame_idx * hop_length - n_fft // 2
 
-        # Stream generated text
         streamer = TextIteratorStreamer(
             processor.tokenizer,
             skip_special_tokens=True,
@@ -132,23 +128,35 @@ def main():
             "streamer": streamer,
         }
 
-        # Run inference separately so microphone capture continues
+        errors = []
+
+        def generate():
+            try:
+                model.generate(**generate_kwargs)
+            except Exception as e:
+                errors.append(e)
+                streamer.end()
+
         thread = threading.Thread(
-            target=model.generate,
-            kwargs=generate_kwargs,
+            target=generate,
             daemon=True,
         )
-
         thread.start()
 
         print("LIVE TRANSCRIPTION:\n")
 
-        for text_chunk in streamer:
-            print(text_chunk, end="", flush=True)
+        try:
+            for text_chunk in streamer:
+                print(text_chunk, end="", flush=True)
+        finally:
+            if errors:
+                print(f"\n\nGeneration error: {errors[0]}")
+
+            print("\n\nStopping transcription...")
 
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n\nStopping transcription...")
+        print("\nTranscription stopped.")

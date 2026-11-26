@@ -75,11 +75,6 @@ pub fn l2_grad(gradient: &DMatrix<f64>, weight:&DMatrix<f64>, lambda: f64) -> DM
 
 // ---- Parameter with ADAM ----
 
-pub struct Adam{
-    
-
-}
-
 
 pub struct Parameter{
     pub w: DMatrix<f64>,
@@ -90,7 +85,7 @@ pub struct Parameter{
 
 }
 impl Parameter{
-    pub struct new(&self, w: DMatrix<f64>) -> Parameter{
+    pub struct new(&self, w : DMatrix<f64>) -> Parameter{
         let height, width = w.shape();
         Parameter{
             w,
@@ -109,8 +104,8 @@ impl Parameter{
         
         // bias correction 
         // here so that the first few weight changes arent cooked
-        let &m_hat = self.m / (1. - ALPHA.powi(self.t));
-        let &v_hat = self.v / (1. - BETA.powi(self.t));
+        let m_hat = self.m / (1. - ALPHA.powi(self.t));
+        let v_hat = self.v / (1. - BETA.powi(self.t));
 
         self.w -= lr * m_hat.component_div(&v_hat.map(|x| x.sqrt()+EPSILON));
         self.g.fill(0.0);

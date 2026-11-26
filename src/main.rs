@@ -209,7 +209,8 @@ fn main() {
             let w = weights[*y];
             total_loss += -w * probs[(0, *y)].max(1e-12).ln();
             if argmax(&row_vec(&probs)) == *y { correct += 1; }
-            model.backwards(*y, weights[*y], LR, WEIGHT_DECAY);   // scale the gradient too
+            model.backwards(*y, weights[*y]);
+            model.step(LR);   // scale the gradient too
         }
         // report weighted loss normalized by total weight so epochs are comparable
         let total_w: f64 = train.iter().map(|(_, y)| weights[*y]).sum();

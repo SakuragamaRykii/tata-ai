@@ -1,25 +1,25 @@
 // ========= ALL FOR MAIN ==================
-const K_EPOCHS: usize = 20;
-const LR: f64 = 0.001;
-const N_LAYERS: usize = 2;
-const TARGET_VOCAB: usize = 3000;
-const SEQ_LEN: usize = 48;
-const TRAIN_FRAC: f64 = 0.75;
-const WEIGHT_DECAY: f64 = 0.0001;
-const N_SAMPLES: usize = 10000;
+pub const K_EPOCHS: usize = 20;
+pub const LR: f64 = 0.001;
+pub const N_LAYERS: usize = 2;
+pub const TARGET_VOCAB: usize = 3000;
+pub const SEQ_LEN: usize = 48;
+pub const TRAIN_FRAC: f64 = 0.75;
+pub const WEIGHT_DECAY: f64 = 0.0001;
+pub const N_SAMPLES: usize = 10000;
 
 
-const MODEL_PATH: &str = "model.json";
+pub const MODEL_PATH: &str = "model.json";
 
 // neutral is now a real, learned class (GoEmotions label 27) instead of a confidence threshold
-const EMOTIONS: [&str; 6] = [
+pub const EMOTIONS: [&str; 6] = [
     "happy", "sad", "angry", "fear", "love", "neutral"
 ];
 // zero-based index of neutral in EMOTIONS
-const NEUTRAL_CLASS: usize = 5;
+pub const NEUTRAL_CLASS: usize = 5;
 
 // values are 1-based class ids (class index = value - 1)
-const GO_EMOTIONS_TO_CLASS: [Option<usize>; 28] = [
+pub const GO_EMOTIONS_TO_CLASS: [Option<usize>; 28] = [
     None,     // 0  admiration
     Some(1),  // 1  amusement     -> happy
     Some(3),  // 2  anger         -> angry
@@ -67,6 +67,6 @@ pub const D_K : usize = D_MODEL / N_HEADS;
 // =================== ALL FOR MATH ==================
 
 // adam shit
-const ALPHA: f64 = 0.90;
-const BETA: f64 = 0.99;
-const EPSILON : f64 = 1e-8;
+pub const ALPHA: f64 = 0.90;
+pub const BETA: f64 = 0.99;
+pub const EPSILON : f64 = 1e-8;
