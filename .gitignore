@@ -21,3 +21,4 @@ target/
 /target
 logs/
 vendor/
+/vendor
